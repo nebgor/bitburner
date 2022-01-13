@@ -1,0 +1,113 @@
+// Defines the "target server", which is the server
+// that we're going to hack. In this case, it's "n00dles"
+var scriptname = "homerun.script";
+var hostname = getHostname();
+var targets = scan(hostname);
+targets.splice(targets.indexOf('home'), 1);
+var scriptram = getScriptRam(scriptname);
+print("scriptram: " + scriptram);
+
+var scripts = [
+    {
+        name: "homerun.script", ram: getScriptRam("homerun.script"), target: "n00dles", ratio: 0, curDeploys: 0
+    },
+    {
+        name: "weaken.script", ram: getScriptRam("weaken.script"), target: "n00dles", ratio: 0.15, curDeploys: 0
+    },
+    {
+        name: "hack.script", ram: getScriptRam("hack.script"), target: "n00dles", ratio: 0.70, curDeploys: 0
+    },
+    {
+        name: "grow.script", ram: getScriptRam("grow.script"), target: "n00dles", ratio: 0.15, curDeploys: 0, multiproc: true
+    }
+];
+var totram = 0;
+targets.map( function(t) {
+    if (hostname == "home" ) killall(t);
+
+    if (hasRootAccess(t) == false) {
+        nuke(t);
+    }
+    if (hasRootAccess(t) == false) {
+        targets.splice(targets.indexOf(t), 1);
+    }
+    scp(scripts.map(function(s){ return s.name}), "home", t);
+    // traverse n spawn homerun to targets
+    // ...
+    
+    sleep(2000);
+    totram += getServerMaxRam(t);
+});
+
+var totDeploys=1;
+var nowram=0;
+var minram=1;
+var offsetidx=0, idx,s;
+targets.map( function(t) {
+    nowram = getServerMaxRam(t) - getServerUsedRam(t);
+    print(t + " ram left: " + nowram);
+    minram = scripts.reduce(function(acc,cur){ return acc.ram<cur.ram ? acc.ram : cur.ram});
+    print("last scripts ram left (1.7?): " + minram);
+    while( nowram > minram ) {
+        for(idx=offsetidx,step=0; step<scripts.length; (idx+1)%s.length, step++ ) {
+            //offset idx
+            s = scripts[idx];
+            s.threads = Math.floor((Math.floor(nowram)) / s.ram);
+            print("available script["+s.name+"] mem-instances:" + s.threads);
+
+            try {
+                // check deployed ratios
+                var deploy_diff =  ((1-scripts[idx].ratio) * scripts[idx].curDeploys) - ((1-s.ratio) * s.curDeploys)
+                if ( deploy_diff >= 0 && s.threads > 1 && s.ratio > 0) {
+                    var normDeploys = Math.floor((s.ratio * totram));
+                    print("normalised aim to deploy for script["+s.name+"]:" + normDeploys);
+                    var instnum = Math.min(s.threads, normDeploys );
+                    nowram = getServerMaxRam(t) - getServerUsedRam(t);
+                    if (nowram > 1) {
+                        s.curDeploys = deployscript_instances(s, instnum, t);
+                        totDeploys += s.curDeploys;
+                        scripts[idx].curDeploys += s.curDeploys;
+                        // tprint(scripts);
+                    }
+                }
+            }
+            catch (e) {
+                print("ignoring fail. e: " + e);
+            }
+            offsetidx = ( idx+1 ) % scripts.length;
+        }
+        minram++;
+        nowram = getServerMaxRam(t) - getServerUsedRam(t);
+        print(t + " ram left(b): " + nowram);
+        while(isRunning(scriptname, t)) {
+            print(t + " is  temporarily used by '"+scriptname+"', waiting.. (b)^");
+            sleep(10000);
+        }
+    }
+});
+tprint("from homerun @ " + hostname);
+tprint("---------");
+tprint(scripts);
+tprint("---------");
+tprint("=========");
+
+
+
+function deployscript_instances(script, instances, target) {
+    var pid;
+    // deploy as procs (threads as the count)
+    if (script.multiproc) {
+        print("attempting run on " + target + " with many procs: " + instances);
+        for (var s = 0; s < instances; s++) {
+            sleep(3000);
+            pid = exec(script.name, target, 1, script.target, s) ;
+        }
+    } else {
+        //deploy as threads
+        print("attempting run on " + target + " with threads: " + instances);
+        pid = exec(script.name, target, instances, script.target);
+    }
+
+    // maintain deployed counts
+    return pid>0?instances:0;
+}
